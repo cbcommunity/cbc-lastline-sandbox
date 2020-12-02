@@ -16,7 +16,7 @@ app/app.log
 todo.txt
 database.sql
 app.log
-app/config.conf
+# app/config.conf
 codeship.aes
 env
 >>>>>>> master
