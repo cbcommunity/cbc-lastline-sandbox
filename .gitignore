@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+.python-version
+.theia
+.DS_Store
+
+# Integration specific
+app/*.sql
+app/app.log
+todo.txt
+database.sql
+app.log
+app/config.conf
+codeship.aes
+env
+>>>>>>> master
