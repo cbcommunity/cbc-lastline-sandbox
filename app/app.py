@@ -34,14 +34,29 @@ def init():
 
     global config, db, cb, ll
 
+    # Check to make sure config file exists
+    app_path = os.path.dirname(os.path.realpath(__file__))
+    config_path = os.path.join(app_path, 'config.conf')
+    if os.path.isfile(config_path) is False:
+        log.exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
+        raise Exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
+        sys.exit(1)
+
     # Get setting from config.ini
     config = configparser.ConfigParser()
-    config.read('config.conf')
+    config.read(config_path)
     config = config2dict(config)
 
+    config['app'] = { 'path': app_path }
+
     # Configure logging
-    log.basicConfig(filename=config['logging']['filename'], format='[%(asctime)s] <pid:%(process)d> %(message)s',
-                    level=log.DEBUG)
+    level = log.getLevelName(config['logging']['level'])
+    log_path = os.path.join(app_path, config['logging']['filename'])
+    log.basicConfig(filename=log_path, format='[%(asctime)s] %(levelname)s <pid:%(process)d> %(message)s', level=level)
+
+    # Log = log.getLogger('myLogger')
+    # Log.setLevel(level)
+
     log.info('\n\n[APP.PY] Sarted Lastline Sandbox Connector for VMware Carbon Black Cloud')
 
     # Configure CLI input arguments
@@ -86,7 +101,7 @@ def init():
     return config, db, cb, ll
 
 
-def take_action(email, sha256, cb_processes):
+def take_action(report, sha256, cb_processes):
     '''
         This method will identify which actions are enabled in the config file
             and execute each appropriately.
@@ -116,7 +131,7 @@ def take_action(email, sha256, cb_processes):
     if 'watchlist' in actions and actions['watchlist'] is not None:
         # The threats are in an array. We need to figure out which one
         #   represents the hash being processed
-        for threat in email['threatsInfoMap']:
+        for threat in report['threatsInfoMap']:
             if threat['threat'] == sha256:
                 break
 
@@ -130,10 +145,10 @@ def take_action(email, sha256, cb_processes):
         description = 'A description can go here.'
 
         # Lastline's scoring is 0-100, CBC EEDR is 1-10
-        if email['malwareScore'] == 0:
+        if report['malwareScore'] == 0:
             severity = 1
         else:
-            severity = round(email['malwareScore'] / 10)
+            severity = round(report['malwareScore'] / 10)
 
         url = threat['threatUrl']
         tags = [threat['threatStatus'], threat['threatType'], threat['classification']]
@@ -163,7 +178,7 @@ def take_action(email, sha256, cb_processes):
         device_id = int(process['device_id'])
         process_guid = process['process_guid']
 
-        records = db.get_record(process_guid=process_guid)
+        records = db.get_record('processes', process_guid=process_guid)
 
         # If the process has already been analyzed, skip it
         if records is not None:
@@ -177,7 +192,7 @@ def take_action(email, sha256, cb_processes):
                     'Content-Type': 'application/json'
                 }
                 body = {
-                    'email': email,
+                    'report': report,
                     'sha256': sha256,
                     'process': process
                 }
@@ -204,7 +219,7 @@ def take_action(email, sha256, cb_processes):
         if 'policy' in actions and actions['policy'] is not None:
             cb.update_policy(device_id, actions['policy'])
 
-        db.add_record(device_id, process_guid, sha256)
+        # db.add_record(device_id, process_guid, sha256)
 
 
 def action_script(device_id, pid=None, file_path=None):
@@ -270,50 +285,217 @@ def action_script(device_id, pid=None, file_path=None):
     subprocess.Popen(cmd + args, stdout=stdout, stdin=stdin)
 
 
+def analyze_processes():
+    '''
+        Comming soon...
+    '''
+    # Get all processes that have a reputation as provided in the config file
+    # Remove extra spaces
+    reputations = config['CarbonBlack']['reputation'].replace(' ', '')
+    # Start building the query
+    reputations = reputations.replace(',', ' OR process_effective_reputation:')
+    query = 'process_effective_reputation:{0}'.format(reputations)
+
+    # Build the request body
+    search_body = {
+        'query': query,
+        'criteria': {
+            'device_os': ['WINDOWS']
+        },
+        'fields': [
+            '*',
+            'device_os',
+            'process_effective_reputation',
+            'process_reputation',
+            'process_sha256',
+            'process_cmdline',
+            'parent_reputation',
+            'parent_guid',
+            'parent_hash',
+            'parent_name',
+            'parent_effective_reputation'
+        ],
+        'rows': 5000,
+        'time_range': {
+            'window': '-{0}'.format(config['CarbonBlack']['window'])
+        }
+    }
+
+    search_body['query'] = query
+
+    processes = cb.get_processes(search_body)
+
+    log.info('Found {0} processes matching the criteria.'.format(len(processes['results'])))
+
+    for process in processes['results']:
+        process_guid = process['process_guid']
+        sha256 = process['process_sha256']
+        hash_cache = []
+        take_action = False
+
+        # Check to see if this process has already been inspected
+        process_record = db.get_record('processes', process_guid=process['process_guid'])
+        if process_record is not None:
+            # If it HAS been inspected, skip it
+            log.info('[APP.PY] Process with guid {0} was already inspected.'.format(process['process_guid']))
+            pass
+        
+        # print(process_guid)
+
+        # If the process HAS NOT been inspected
+        else:
+            # Check to see if this hash has already been inspected in the past        
+            hash_record = db.get_record('reports', sha256=sha256)
+
+            if hash_record is not None:
+                if hash_record[0][3] == 'complete':
+                    # If the hash HAS already been inspected, return the results
+                    reports = json.loads(hash_record[0][5])
+                    # print('### {0}'.format(json.dumps(reports, indent=4)))
+                    # print('hash was already inspected: {0}'.format(sha256))
+                    for task in reports['tasks']:
+                        score = task['score']
+                        uuid = task['task_uuid']
+
+                        if score >= int(config['Lastline']['action_threashold']):
+                            take_action = True
+
+                    db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+
+                else:
+                    log.warning('[APP.PY] Hash {0} is still pending in Lastline.'.format(sha256))
+
+            # If the hash HAS NOT been inspected
+            else:
+                # Check to see if it HAS already been detonated in Lastline
+                ll_lookup = ll.query_hash(sha256=sha256)
+                # print(ll_lookup)
+
+                # If the file HAS been detonated, save the results locally
+                if ll_lookup['files_found'] > 0:
+                    for task in ll_lookup['tasks']:
+                        score = task['score']
+                        task_uuid = task['task_uuid']
+
+                        if score >= int(config['Lastline']['action_threashold']):
+                            take_action = True
+
+                        # Get the report
+                        task['report'] = ll.get_result(task_uuid)
+
+                    db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_lookup)
+                    db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+
+                # If the file HAS NOT been detonated
+                else:
+                    # UBS is only availabe on Windows devices. The process_search should have filtered this
+                    if process['device_os'] == 'WINDOWS' and sha256 not in hash_cache:
+                        # Get the binary from CBC EEDR UBS and submit to Lastline
+                        cb_binary = cb.get_binary(sha256)
+
+                        if cb_binary is not None:
+                            binary_url = cb_binary['found'][0]['url']
+                            ll_submission = ll.submit_url(binary_url)
+
+                            db.add_record('reports', sha256=sha256, status='pending', task_uuid=ll_submission['task_uuid'], reports=ll_submission)
+                            db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
+
+                        else:
+                            log.warning('[APP.PY] Unable find binary for {0}'.format(sha256))
+
+                        hash_cache.append(sha256)
+
+                    else:
+                        log.warning('[APP.PY] UBS is only available on Windows devices. This device is {0}'.format(process['device_os']))
+                        db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+            
+            # if take_action: take_action(reports, sha256, process)
+
+    log.info('[APP.PY] Submitted {0} new files to Lastline for analysis.'.format(ll.submits))
+
+
+def analyze_reports():
+    '''
+        Coming soon...
+    '''
+
+    # Convert ISO8601 to Lastline format
+    last_pull = datetime.strptime(db.last_pull(), "%Y-%m-%dT%H:%M:%S%z")
+    last_pull = datetime.strftime(last_pull, "%Y-%m-%d %H:%M:%S")
+    new_reports = ll.get_completed(start_time=last_pull)
+    
+    search_body = {
+        'fields': [
+            '*',
+            'device_os',
+            'process_effective_reputation',
+            'process_reputation',
+            'process_sha256',
+            'process_cmdline',
+            'parent_reputation',
+            'parent_guid',
+            'parent_hash',
+            'parent_name',
+            'parent_effective_reputation'
+        ],
+        'rows': 5000,
+        'time_range': {
+            'window': '-2w'
+        }
+    }
+
+    for task in new_reports['tasks']:
+        report = ll.get_result(task)
+        task_uuid = report['task_uuid']
+        db_record = db.get_record('reports', task_uuid=task_uuid)
+
+        if db_record is None and 'sha256' in report['analysis_subject']:
+            log.info('[APP.PY] Found a new report that did not originate from CBC.')
+            sha256 = report['analysis_subject']['sha256']
+
+            log.info('[APP.PY] Adding Report for SHA256 {0} with task_uuid {1} to the database.'.format(sha256, task_uuid))
+            # Add the report so we don't duplicate a search for it
+            db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=report)
+
+            log.info('[APP.PY] Searching for any processes with SHA256 {0}'.format(sha256))
+            # Update the search_body with a query now that we have the sha256
+            search_body['query'] = 'process_hash:{0}'.format(sha256)
+            processes = cb.get_processes(search_body)
+
+            for process in processes:
+                proc_record = db.get_record('processes', process_guid=process['process_guid'])
+                if proc_record is None:
+                    print('take_action(report, {0}, {1})'.format(sha256, process['device_id']))
+                    # take_action(report, sha256, process)
+                    db.add_record('processes', sha256=sha256, process_guid=process['process_guid'], status='complete')
+
+        if db_record is not None:
+            print(json.dumps(db_record, indent=4))
+            log.info(json.dumps(db_record, indent=4))
+        
+        if 'sha256' not in report['analysis_subject']:
+            log.info('[APP.PY] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid))
+        # sha256 = report['analysis_subject']['sha256']
+
+
+
 def main():
     # Get inits
     init()
 
-    limits = cb.get_process_limits()
+    # Get all processes that have the reputation listed in the config file
+    analyze_processes()
 
-    if config['CarbonBlack']['start_time'] is None:
-        # Get CBC alerts from the last pull until 30 minutes ago
-        last_pull = db.last_pull()
-        if last_pull is None:
-            delta = int(config['CarbonBlack']['delta'])
-            last_pull = datetime.now() - timedelta(delta)
-            last_pull = convert_time(last_pull)
-            
-        start_time = last_pull
-    else:
-        start_time = config['CarbonBlack']['start_time']
+    # Get all detonations from Lastline Sandbox and search for processes matching bad files
+    analyze_reports()
 
-    if config['CarbonBlack']['end_time'] is None:
-        end_time = convert_time(limits['time_bounds']['upper'])
-    else:
-        end_time = config['CarbonBlack']['end_time']
-
-    alerts = cb.get_alerts(start_time=start_time, end_time=end_time)
-    
-    for alert in alerts:
-        
-
-    sys.exit(0)
-
-    '''
-        For each alert, check to see if that file has been submitted in the past.
-        If it hasn't, send it to LL.
-        If it has, log and skip
-    '''
-
-    # Once all of the emails and processes have been analyzed, check to see if any new IOCs
+    # Once all of the reports and processes have been analyzed, check to see if any new IOCs
     #   are cached and waiting to be added to the watchlist. If so, add them.
     if 'watchlist' in config['actions'] and config['actions']['watchlist'] is not None:
         cb.update_feed(config['actions']['watchlist'])
 
-    if config['Lastline']['end_time'] is None:
-        # Update the last_pull time for the next execution
-        db.last_pull(timestamp=end_time)
+    # Update the last_pull time
+    db.last_pull(timestamp=convert_time('now'))
 
     # Close the connection to the database
     db.close()

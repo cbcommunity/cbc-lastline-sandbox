@@ -98,7 +98,7 @@ class CarbonBlackCloud:
             self.log.error('[%s] Error {0}: {1}'.format(r.status_code, r.text), self.class_name)
             raise Exception('Error {0}: {1}'.format(r.status_code, r.text))
 
-    def get_processes(self, sha256, window):
+    def get_processes(self, body=None):
         '''
             The Get Processes API is asyncronous. We first make the request for the search,
                 then use the `job_id` to get the results. Pagination may occur.
@@ -107,13 +107,8 @@ class CarbonBlackCloud:
         url = '/'.join([self.url, 'api/investigate/v2/orgs', self.org_key, 'processes/search_jobs'])
         headers = self.headers
         headers['X-Auth-Token'] = '{0}/{1}'.format(self.cust_api_key, self.cust_api_id)
-        body = {
-            'query': 'process_hash:{0}'.format(sha256),
-            'rows': 5000,
-            'time_range': {
-                'window': '-{0}'.format(window)
-            }
-        }
+
+        # print('### {0}'.format(json.dumps(body, indent=4)))
 
         # Request the data from the endpoint
         r = requests.post(url, headers=headers, data=json.dumps(body))
@@ -631,6 +626,8 @@ class CarbonBlackCloud:
         '''
             Get file from CBC
         '''
+        self.log.info('[%s] Getting binary URL for {0}'.format(sha256), self.class_name)
+
         # Define the request basics
         url = '/'.join([self.url, 'ubs/v1/orgs', self.org_key, 'file/_download'])
         headers = self.headers
@@ -645,11 +642,17 @@ class CarbonBlackCloud:
 
         # If the request was successful
         if r.status_code == 200:
-            return r.json()
+            data = r.json()
+            self.log.info('[%s] Found binary URL for {0}'.format(sha256), self.class_name)
+            return data
         
+        if r.status_code == 404:
+            self.log.error('[%s] Unable to find binary for {0}'.format(sha256), self.class_name)
         else:
             self.log.error('[%s] Error: {0} {1}'.format(r.status_code, r.text), self.class_name)
-
+        
+        return None
+    
     #
     # CBC Live Response helpers
     #
@@ -934,9 +937,33 @@ class Lastline:
                 'Cache-Control': 'no-cache',
                 'User-Agent': config['user_agent']
             }
+            self.auth = {
+                'key': self.api_key,
+                'api_token': self.api_token
+            }
+
+            self.submits = 0
 
         except Exception as err:
             self.log.exception(err)
+
+    def authenticate(self):
+        # Define the request basics
+        url = '/'.join([self.url, 'authentication/login'])
+        params = {
+            'key': self.api_key,
+            'api_token': self.api_token
+        }
+
+        # Request the data from the endpoint
+        r = requests.post(url, headers=self.headers, params=params)
+
+        # If the request was successful
+        if r.status_code == 200:
+            return r.json()
+        
+        else:
+            self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
 
     def query_hash(self, md5=None, sha256=None):
         '''
@@ -957,52 +984,76 @@ class Lastline:
             hash_algorithm = 'sha256'
             hash_value = sha256
 
+        self.log.info('[%s] Querying for {0} of {1}'.format(hash_algorithm, hash_value), self.class_name)
+
         # Define the request basics
         url = '/'.join([self.url, 'analysis/query/file_hash'])
         params = {
             'hash_algorithm': hash_algorithm,
             'hash_value': hash_value
         }
+        params.update(self.auth)
 
         # Request the data from the endpoint
         r = requests.post(url, headers=self.headers, params=params)
 
         # If the request was successful
         if r.status_code == 200:
-            return r.json()
+            data = r.json()['data']
+
+            self.log.info('[%s] Found {0} results for {1}'.format(data['files_found'], hash_value), self.class_name)
+
+            return data
         
         else:
             self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
 
-    def authenticate(self):
+    def get_result(self, uuid):
+        '''
+            !!! Coming soon...
+            [] check to see if 
+        '''
+
+        # !!! check to make sure uuid is a string
+
+        self.log.info('[%s] Getting report for task_uuid {0}'.format(uuid), self.class_name)
+
         # Define the request basics
-        url = '/'.join([self.url, 'authentication/login'])
+        url = '/'.join([self.url, 'analysis/get_result'])
         params = {
-            'key': self.api_key,
-            'api_token': self.api_token
+            'uuid': uuid
         }
+        params.update(self.auth)
 
         # Request the data from the endpoint
         r = requests.post(url, headers=self.headers, params=params)
 
         # If the request was successful
         if r.status_code == 200:
-            return r.json()
+            data = r.json()['data']
+            self.log.info('[%s] Found report for task_uuid {0}'.format(uuid), self.class_name)
+            return data
         
         else:
             self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
 
-    def submit_url(self, url):
+    def submit_url(self, cb_url):
         # Define the request basics
         url = '/'.join([self.url, 'analysis/submit/url'])
-        params = { 'url': url }
+        params = { 'url': cb_url }
+        params.update(self.auth)
+
+        self.log.info('[%s] Submitting URL for analysis', self.class_name)
 
         # Request the data from the endpoint
         r = requests.post(url, headers=self.headers, params=params)
 
         # If the request was successful
         if r.status_code == 200:
-            return r.json()
+            data = r.json()['data']
+            self.log.info('[%s] Submitted URL for analysis. Got task_uuid {0}'.format(data['task_uuid']), self.class_name)
+            self.submits += 1
+            return data
         
         else:
             self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
@@ -1013,20 +1064,30 @@ class Lastline:
             end_time: Request tasks completed before this time. (optional, default=<current timestamp>)
         '''
         # Define the request basics
-        url = '/'.join([self.url, 'analysis/dget_completed'])
+        url = '/'.join([self.url, 'analysis/get_completed'])
+        label = []
 
         params = {}
         if start_time is not None:
             params['after'] = start_time
+            label.append('after {0}'.format(start_time))
         if end_time is not None:
             params['before'] = end_time
+            label.append('before {0}'.format(end_time))
+        params.update(self.auth)
+
+        label = ' and '.join(label)
+
+        self.log.info('[%s] Searching for completed tasks {0}'.format(label), self.class_name)
 
         # Request the data from the endpoint
         r = requests.post(url, headers=self.headers, params=params)
 
         # If the request was successful
         if r.status_code == 200:
-            return r.json()
+            data = r.json()['data']
+            self.log.info('[%s] Found: {0} completed tasks {1}'.format(len(data['tasks']), label), self.class_name)
+            return data
         
         else:
             self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
@@ -1041,8 +1102,10 @@ class Database:
         '''
             Initialise the database object. Create database and tables if they
                 don't exist.
+
             Inputs
                 config (str):   Dict containing settings from config.ini
+
             Output:
                 self
         '''
@@ -1054,15 +1117,26 @@ class Database:
 
             self.config = config
             self.conn = None
-            self.connect(config['sqlite3']['filename'])
+
+            db_path = os.path.join(config['app']['path'], config['sqlite3']['filename'])
+            self.connect(db_path)
 
             sql = [
-                '''CREATE TABLE IF NOT EXISTS records (
+                '''CREATE TABLE IF NOT EXISTS processes (
                     id integer PRIMARY KEY,
                     timestamp text,
-                    device_id text,
+                    sha256 text,
                     process_guid text,
-                    sha256 text
+                    status text
+                );''',
+
+                '''CREATE TABLE IF NOT EXISTS reports (
+                    id integer PRIMARY KEY,
+                    timestamp text,
+                    sha256 text,
+                    status text,
+                    task_uuid text,
+                    reports text
                 );''',
 
                 '''CREATE TABLE IF NOT EXISTS last_pull (
@@ -1078,11 +1152,11 @@ class Database:
                 cursor.execute(sql[0])
                 cursor.execute(sql[1])
                 cursor.execute(sql[2])
+                cursor.execute(sql[3])
                 rows = cursor.fetchall()
 
                 if len(rows) == 0:
-                    last_pull = datetime.now() - timedelta(minutes=int(self.config['Lastline']['delta']))
-                    last_pull = datetime.strftime(last_pull, '%Y-%m-%dT%H:%M:%SZ')
+                    last_pull = convert_time('now')
                     sql = '''INSERT INTO last_pull(timestamp) VALUES(?)'''
                     cursor.execute(sql, (last_pull,))
                     self.conn.commit()
@@ -1200,86 +1274,101 @@ class Database:
             self.log.warning('[%s] No results found in database. Returning None.', self.class_name)
             return None
 
-    def get_record(self, device_id=None, process_guid=None, sha256=None):
+    def get_record(self, table, **data):
         '''
-            Looks for any rows in the database with the provided hash
+            Looks for any rows in the database with the provided info
+            
             Inputs
-                md5 (str):      MD5 hash to search for in the database
-                sha256 (str):   SHA256 hash to search for in the database
+                table (str): the table name that will be queried
+                data (kwarg)
+                    if the table is 'processes':
+                        data['process_guid'] (str) [REQUIRED]
+                    if the table is 'reports':
+                        data['sha256'] (str)
+                        data['task_uuid'] (str)
+            
             Raises
-                TypeError if md5 is not a string
-                ValueError if md5 is not 32 characters long
-                TypeError if sha256 is not a string
-                ValueError if sha256 is not 64 characters long
+                Exception if no connection to the database is established
+
+                if the table is 'processes':
+                    ValueError if process_guid is not provided
+                    TypeError if process_guid is not a string
+                if the table is 'reports':
+                    ValueError if sha256 is missing
+                    TypeError if sha256 is not a string
+                    ValueError if sha256 is not 64 characters
+            
             Output
-                Returns any rows found matching the provided hash. If no results
+                Returns any rows found matching the provided info. If no results
                     were found, returns None
         '''
+
+        if self.conn is None:
+            raise Exception('No connection to database')
 
         sql_filter_keys = []
         sql_filter_values = []
 
-        if device_id is not None:
-            if isinstance(device_id, int) is False:
-                raise TypeError('Expected device_id input type is integer.')
-            sql_filter_keys.append('device_id = ?')
-            sql_filter_values.append(device_id)
+        if table == 'processes':
+            if 'process_guid' not in data:
+                raise ValueError('[%s] Missing required filed of process_guid', self.class_name)
+            if isinstance(data['process_guid'], str) is False:
+                raise TypeError('[%s] Expected process_guid input type is string.', self.class_name)
 
-        if process_guid is not None:
-            if isinstance(process_guid, str) is False:
-                raise TypeError('Expected process_guid input type is string.')
             sql_filter_keys.append('process_guid = ?')
-            sql_filter_values.append(process_guid)
+            sql_filter_values.append(data['process_guid'])
 
-        if sha256 is not None:
-            if isinstance(sha256, str) is False:
-                raise TypeError('Expected sha256 input type is string.')
-            if len(sha256) != 64:
-                raise ValueError('Expected sha256 to be 64 characters long')
-            sql_filter_keys.append('sha256 = ?')
-            sql_filter_values.append(sha256)
+        if table == 'reports':
+            if 'sha256' in data:
+                if isinstance(data['sha256'], str) is False:
+                    raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
+                if len(data['sha256']) != 64:
+                    raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
+                
+                sql_filter_keys.append('sha256 = ?')
+                sql_filter_values.append(data['sha256'])
+            if 'task_uuid' in data:
+                if isinstance(data['task_uuid'], str) is False:
+                    raise TypeError('[%s] Expected task_uuid input type is string.', self.class_name)
+
+                sql_filter_keys.append('task_uuid = ?')
+                sql_filter_values.append(data['task_uuid'])
 
         if len(sql_filter_keys) == 0:
             self.log.error('[%s] No filter criteria provided', self.class_name)
-            raise Exception('No filter criteria provided')
+            raise Exception('[%s] No filter criteria provided', self.class_name)
 
         sql_filter_values = tuple(sql_filter_values)
-        sql_filter_keys = ' and '.join(sql_filter_keys)
-
-        self.log.info('[%s] Getting record with filter(s): {0}'.format(sql_filter_keys), self.class_name)
+        sql_filter_keys = ' AND '.join(sql_filter_keys)
 
         try:
-            sql = 'SELECT * FROM records WHERE {0};'.format(sql_filter_keys)
+            sql = 'SELECT * FROM {0} WHERE {1};'.format(table, sql_filter_keys)
+            self.log.info('[%s] Getting record(s) with filter(s): {0} {1}'.format(sql, sql_filter_values), self.class_name)
 
             cursor = self.conn.cursor()
             cursor.execute(sql, sql_filter_values)
             rows = cursor.fetchall()
             if len(rows) > 0:
-                self.log.info('[%s] Found {0} records'.format(len(rows)), self.class_name)
+                self.log.info('[%s] Found {0} results'.format(len(rows)), self.class_name)
                 return rows
 
-            self.log.info('[%s] Unable to find any records', self.class_name)
+            self.log.info('[%s] Unable to find any results', self.class_name)
             return None
 
         except Exception as err:
             self.log.exception(err)
 
-    def add_record(self, device_id, process_guid, sha256):
+    def add_record(self, table, **data):
         '''
             Adds a file to the database
 
             Inputs
-                device_id (str):
-                process_guid (str):
                 sha256 (str):
 
             Raises
-                Exception if not connection exists
-                TypeError if md5 is not a string
-                ValueError if md5 is not 32 characters long
+                Exception if no database connection exists
                 TypeError if sha256 is not a string
                 ValueError if sha256 is not 64 characters long
-                TypeError if status is not a string
 
             Output
                 row_id (int):   Returns the row ID of the new entry
@@ -1288,27 +1377,116 @@ class Database:
         if self.conn is None:
             raise Exception('No connection to database')
 
-        if isinstance(device_id, int) is False:
-            raise TypeError('device_id must be an int')
-        if isinstance(process_guid, str) is False:
-            raise TypeError('process_guid must be a string')
-        if isinstance(sha256, str) is False:
-            raise TypeError('sha256 must be a string')
-        if len(sha256) != 64:
-            raise ValueError('sha256 must be 64 characters long')
+        timestamp = convert_time('now')
 
-        self.log.info('[%s] Adding process: {0}'.format(process_guid), self.class_name)
+        if table == 'processes':
+            if 'sha256' not in data:
+                raise ValueError('[%s] Missing required filed of sha256', self.class_name)
+            if isinstance(data['sha256'], str) is False:
+                raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
+            if len(data['sha256']) != 64:
+                raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
+            if 'process_guid' not in data:
+                raise ValueError('[%s] Missing required process_guid', self.class_name)
+            if isinstance(data['process_guid'], str) is False:
+                raise TypeError('process_guid must be a string')
+            if self.get_record(table, process_guid=data['process_guid']):
+                raise Exception('Process already exists: {0}'.format(data['process_guid']))
+
+            sql_values = (timestamp, data['sha256'], data['process_guid'], data['status'],)
+            sql_query = 'INSERT INTO {0}(timestamp,sha256,process_guid,status) VALUES(?,?,?,?)'.format(table)
+
+        if table == 'reports':
+            if 'sha256' not in data:
+                raise ValueError('[%s] Missing required filed of sha256', self.class_name)
+            if isinstance(data['sha256'], str) is False:
+                raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
+            if len(data['sha256']) != 64:
+                raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
+            if self.get_record(table, sha256=data['sha256']):
+                raise Exception('Hash already exists: {0}'.format(data['sha256']))
+            if 'status' not in data:
+                raise ValueError('[%s] Missing required filed of status', self.class_name)
+            if 'task_uuid' not in data:
+                raise ValueError('[%s] Missing required filed of task_uuid', self.class_name)
+            if 'reports' not in data:
+                raise ValueError('[%s] Missing required filed of reports', self.class_name)
+
+            sql_values = (timestamp, data['sha256'], data['status'], data['task_uuid'], json.dumps(data['reports']),)
+            sql_query = 'INSERT INTO {0}(timestamp,sha256,status,task_uuid,reports) VALUES(?,?,?,?,?)'.format(table)
 
         try:
-            if self.get_record(process_guid=process_guid):
-                raise Exception('Process already exists: {0}'.format(process_guid))
-
-            timestamp = convert_time('now')
-            file_info = (timestamp, device_id, process_guid, sha256,)
-            sql = 'INSERT INTO records(timestamp,device_id,process_guid,sha256) VALUES(?,?,?,?)'
             cur = self.conn.cursor()
-            cur.execute(sql, file_info)
+            cur.execute(sql_query, sql_values)
             self.conn.commit()
+
+            return cur.lastrowid
+
+        except Exception as err:
+            self.log.exception(err)
+
+    def update_record(self, table, **data):
+        '''
+            !!  Coming soon...
+
+            Inputs
+                md5 (str):      MD5 hash to add to the row
+                sha256 (str):   SHA256 hash to add to the row
+                status (str):   Status from Zscaler report
+
+            Raises
+                Exception if not connection exists
+
+            Output
+                data (list):    Returns the results of the new row
+        '''
+        if self.conn is None:
+            raise Exception('No connection to database')
+
+        timestamp = convert_time('now')
+
+        if table == 'processes':
+            if 'sha256' not in data:
+                raise ValueError('[%s] Missing required filed of sha256', self.class_name)
+            if isinstance(data['sha256'], str) is False:
+                raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
+            if len(data['sha256']) != 64:
+                raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
+            if 'process_guid' not in data:
+                raise ValueError('[%s] Missing required process_guid', self.class_name)
+            if isinstance(data['process_guid'], str) is False:
+                raise TypeError('process_guid must be a string')
+            if self.get_record(table, process_guid=data['process_guid']):
+                raise Exception('Process already exists: {0}'.format(data['process_guid']))
+
+            sql_values = (timestamp, data['sha256'], data['process_guid'], data['status'],)
+            sql_query = 'INSERT INTO {0}(timestamp,sha256,process_guid,status) VALUES(?,?,?,?)'.format(table)
+
+        if table == 'reports':
+            if 'sha256' not in data:
+                raise ValueError('[%s] Missing required filed of sha256', self.class_name)
+            if isinstance(data['sha256'], str) is False:
+                raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
+            if len(data['sha256']) != 64:
+                raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
+            if self.get_record(table, sha256=data['sha256']):
+                raise Exception('Hash already exists: {0}'.format(data['sha256']))
+            if 'status' not in data:
+                raise ValueError('[%s] Missing required filed of status', self.class_name)
+            if 'task_uuid' not in data:
+                raise ValueError('[%s] Missing required filed of task_uuid', self.class_name)
+            if 'reports' not in data:
+                raise ValueError('[%s] Missing required filed of reports', self.class_name)
+
+            # sql_query = 'INSERT INTO {0}(timestamp,status,task_uuid,reports) VALUES(?,?,?,?) WHERE sha256 = ?'.format(table)
+            sql_query = 'UPDATE {0} SET timestamp = ?, status = ?, task_uuid = ?, reports = ? WHERE sha256 = ?'
+            sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
+
+        try:
+            cur = self.conn.cursor()
+            cur.execute(sql_query, sql_values)
+            self.conn.commit()
+
             return cur.lastrowid
 
         except Exception as err:
@@ -1327,7 +1505,7 @@ def convert_time(timestamp):
                 'now' (str)
 
         Raises
-            TypeError if timestamp is not a string or integer
+            TypeError if timestamp is not a string, integer or datetime object
 
         Output
             If timestamp was epoch, returns ISO8601 version of timestamp
