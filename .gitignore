@@ -12,11 +12,4 @@ __pycache__/
 
 # Integration specific
 app/*.sql
-app/app.log
-todo.txt
-database.sql
-app.log
-# app/config.conf
-codeship.aes
-env
->>>>>>> master
+app/*.log
