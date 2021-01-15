@@ -40,7 +40,6 @@ def init():
     if os.path.isfile(config_path) is False:
         log.exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
         raise Exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
-        sys.exit(1)
 
     # Get setting from config.ini
     config = configparser.ConfigParser()
@@ -50,9 +49,9 @@ def init():
     config['app'] = { 'path': app_path }
 
     # Configure logging
-    level = log.getLevelName(config['logging']['level'])
+    log_level = log.getLevelName(config['logging']['level'])
     log_path = os.path.join(app_path, config['logging']['filename'])
-    log.basicConfig(filename=log_path, format='[%(asctime)s] %(levelname)s <pid:%(process)d> %(message)s', level=level)
+    log.basicConfig(filename=log_path, format='[%(asctime)s] %(levelname)s <pid:%(process)d> %(message)s', level=log_level)
 
     # Log = log.getLogger('myLogger')
     # Log.setLevel(level)
@@ -84,6 +83,10 @@ def init():
     # If a last_pull was provided, update the database with it
     if args.last_pull is not None:
         db.last_pull(args.last_pull)
+
+    # Trim old processes and reports
+    db.trim_records('processes', config['sqlite3']['deprecation'])
+    db.trim_records('reports', config['sqlite3']['deprecation'])
 
     config['CarbonBlack']['start_time'] = args.start_time
     config['CarbonBlack']['end_time'] = args.end_time

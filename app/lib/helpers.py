@@ -1010,11 +1010,11 @@ class Lastline:
 
     def get_result(self, uuid):
         '''
-            !!! Coming soon...
+            # !!! Coming soon...
             [] check to see if 
         '''
 
-        # !!! check to make sure uuid is a string
+        # TODO: check to make sure uuid is a string
 
         self.log.info('[%s] Getting report for task_uuid {0}'.format(uuid), self.class_name)
 
@@ -1164,6 +1164,17 @@ class Database:
 
             except Exception as err:
                 self.log.exception(err)
+
+        except Exception as err:
+            self.log.exception(err)
+
+    def _execute(self, sql_query, sql_values):
+        try:
+            cur = self.conn.cursor()
+            cur.execute(sql_query, sql_values)
+            self.conn.commit()
+
+            return cur.lastrowid
 
         except Exception as err:
             self.log.exception(err)
@@ -1482,6 +1493,7 @@ class Database:
             sql_query = 'UPDATE {0} SET timestamp = ?, status = ?, task_uuid = ?, reports = ? WHERE sha256 = ?'
             sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
 
+        # ? result = self._execute(sql_query, sql_values)
         try:
             cur = self.conn.cursor()
             cur.execute(sql_query, sql_values)
@@ -1491,6 +1503,13 @@ class Database:
 
         except Exception as err:
             self.log.exception(err)
+
+    def trim_records(self, table, deprecation):
+        sql_query = 'DELETE FROM ? WHERE timestamp < date("now", "? days");'
+        sql_values = (table, deprecation,)
+
+        result = self._execute(sql_query, sql_values)
+        return result
 
 
 def convert_time(timestamp):
