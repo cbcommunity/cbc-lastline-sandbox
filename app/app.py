@@ -40,7 +40,6 @@ def init():
     if os.path.isfile(config_path) is False:
         log.exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
         raise Exception('[APP.PY] Unable to find config.conf in {0}'.format(app_path))
-        sys.exit(1)
 
     # Get setting from config.ini
     config = configparser.ConfigParser()
@@ -87,7 +86,7 @@ def init():
 
     config['CarbonBlack']['start_time'] = args.start_time
     config['CarbonBlack']['end_time'] = args.end_time
-
+    config['CarbonBlack']['ubs_enabled'] = str2bool(config['CarbonBlack']['ubs_enabled'])
     # Define some integraiton basics
     config['version'] = 'v1.0'
     config['user_agent'] = 'VMware Carbon Black Cloud Connector / cbc-lastline {0}'.format(config['version'])
@@ -287,20 +286,28 @@ def action_script(device_id, pid=None, file_path=None):
 
 def analyze_processes():
     '''
-        Comming soon...
+        Get all processes that have a reputation as provided in the config file
     '''
-    # Get all processes that have a reputation as provided in the config file
+    fn_name = 'APP.PY'
+
     # Remove extra spaces
     reputations = config['CarbonBlack']['reputation'].replace(' ', '')
     # Start building the query
     reputations = reputations.replace(',', ' OR process_effective_reputation:')
     query = 'process_effective_reputation:{0}'.format(reputations)
 
+    # Enable debugging
+    # * Used for debugging. This will limit the search to only the process hash defined
+    if config['debug']['cb_sample_hash'] is not None:
+        query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
+
     # Build the request body
+    # ! This has a test device hard coded to prevent tampering with other endpoints
     search_body = {
         'query': query,
         'criteria': {
-            'device_os': ['WINDOWS']
+            'device_os': ['WINDOWS'],
+            'device_id': ['3984889']
         },
         'fields': [
             '*',
@@ -322,48 +329,89 @@ def analyze_processes():
     }
 
     search_body['query'] = query
+    # !! convert this to a JSON string
+    log.debug('[%s] Created query to search for processes: {0}'.format(search_body), fn_name)
 
+    # Run the search and get results
     processes = cb.get_processes(search_body)
+    log.info('[%s] Found {0} processes matching the criteria.'.format(len(processes['results'])), fn_name)
 
-    log.info('Found {0} processes matching the criteria.'.format(len(processes['results'])))
+    # Used to prevent duplicate submissions to Lastline
+    hash_cache = []
 
     for process in processes['results']:
         process_guid = process['process_guid']
         sha256 = process['process_sha256']
-        hash_cache = []
         take_action = False
 
         # Check to see if this process has already been inspected
-        process_record = db.get_record('processes', process_guid=process['process_guid'])
-        if process_record is not None:
-            # If it HAS been inspected, skip it
-            log.info('[APP.PY] Process with guid {0} was already inspected.'.format(process['process_guid']))
-            pass
-        
-        # print(process_guid)
+        process_record = db.get_record('processes', process_guid=process_guid)
 
-        # If the process HAS NOT been inspected
-        else:
+        # If the process HAS NOT been inspected or is still pending
+        # * Does the PROCESS need to be inspected?
+        if process_record is None or process_record[0][4] == 'pending':
+            if process_record is None:
+                log.debug('[%s] The process "{0}" has not been inspected before.'.format(process_guid), fn_name)
+            else:
+                log.debug('[%s] The process "{0}" is pending. Checking this process again.'.format(process_guid), fn_name)
+
+            if sha256 in hash_cache:
+                log.debug('[%s] The hash has already been submitted for inspection this script iteration', fn_name)
+                continue
+
             # Check to see if this hash has already been inspected in the past        
+            # * Check the database to see if the HASH has been inspected in the past
             hash_record = db.get_record('reports', sha256=sha256)
 
+            # If the hash HAS been inspected, is it completed or pending?
+            # * Has the HASH been inspected before?
             if hash_record is not None:
-                if hash_record[0][3] == 'complete':
-                    # If the hash HAS already been inspected, return the results
-                    reports = json.loads(hash_record[0][5])
-                    # print('### {0}'.format(json.dumps(reports, indent=4)))
-                    # print('hash was already inspected: {0}'.format(sha256))
-                    for task in reports['tasks']:
-                        score = task['score']
-                        uuid = task['task_uuid']
+                report_status = hash_record[0][3]
+                task_uuid = hash_record[0][4]
+                reports = json.loads(hash_record[0][5])
 
-                        if score >= int(config['Lastline']['action_threashold']):
+                # If the hash HAS already been inspected, return the results
+                # * Is the REPORT COMPLETE?
+                # ? Sometimes the report is stored with child 'tasks', sometimes without
+                if report_status == 'complete':
+                    if 'tasks' in reports:
+                        # * For each TASK in the report
+                        for task in reports['tasks']:
+                            # * Is the score > the action_threashold?
+                            if task['score'] >= int(config['Lastline']['action_threashold']):
+                                log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
+                                # * take_action
+                                take_action = True
+
+                    else:
+                        if reports['score'] >= int(config['Lastline']['action_threashold']):
+                            log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
+                            # * take_action
                             take_action = True
-
+                        
+                    # * Save PROCESS to the local database as COMPLETE
                     db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
 
+                # If the hash is still pending
                 else:
-                    log.warning('[APP.PY] Hash {0} is still pending in Lastline.'.format(sha256))
+                    log.info('[%s] Hash "{0}" is still pending in the database.'.format(sha256), fn_name)
+                    ll_result = ll.get_result(task_uuid)
+
+                    if ll_result is not None:
+                        if ll_result['score'] >= int(config['Lastline']['action_threashold']):
+                            log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
+                            take_action = True
+
+                        else:
+                            log.info('[%s] Report score for {0} is {1}. Not high enough to take action.'.format(task_uuid, ll_result['score']), fn_name)
+
+                        db.update_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+                        db.update_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_result)
+
+                    else:
+                        log.info('[%s] Hash "{0}" is still pending in Lastline'.format(sha256), fn_name)
+                        hash_cache.append(sha256)
+
 
             # If the hash HAS NOT been inspected
             else:
@@ -378,16 +426,19 @@ def analyze_processes():
                         task_uuid = task['task_uuid']
 
                         if score >= int(config['Lastline']['action_threashold']):
-                            take_action = True
+                            # Get the report
+                            task['report'] = ll.get_result(task_uuid)
 
-                        # Get the report
-                        task['report'] = ll.get_result(task_uuid)
+                            # !!! add report to database
+                            take_action = True
 
                     db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_lookup)
                     db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
 
                 # If the file HAS NOT been detonated
                 else:
+                    if config['CarbonBlack']['ubs_enabled'] is not True:
+                        log.info('[%s] Unable to pull binary from CBC. Please enable Universal Binary Store in the console and in the config.conf file.', fn_name)
                     # UBS is only availabe on Windows devices. The process_search should have filtered this
                     if process['device_os'] == 'WINDOWS' and sha256 not in hash_cache:
                         # Get the binary from CBC EEDR UBS and submit to Lastline
@@ -401,23 +452,30 @@ def analyze_processes():
                             db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
 
                         else:
-                            log.warning('[APP.PY] Unable find binary for {0}'.format(sha256))
+                            log.warning('[%s] Unable to find binary for {0}'.format(sha256), fn_name)
 
                         hash_cache.append(sha256)
 
                     else:
-                        log.warning('[APP.PY] UBS is only available on Windows devices. This device is {0}'.format(process['device_os']))
+                        log.warning('[%s] UBS is only available on Windows devices. This device is {0}'.format(process['device_os']), fn_name)
                         db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
             
-            # if take_action: take_action(reports, sha256, process)
+            if take_action:
+                log.debug('[%s] Taking action on process "{0}"'.format(process_guid))
+                # !! take_action(reports, sha256, process)
 
-    log.info('[APP.PY] Submitted {0} new files to Lastline for analysis.'.format(ll.submits))
+        # If it HAS been inspected
+        else:
+            log.info('[%s] Process with guid "{0}" was already inspected.'.format(process['process_guid']), fn_name)
+
+    log.info('[%s] Submitted {0} new files to Lastline for analysis.'.format(ll.submits), fn_name)
 
 
 def analyze_reports():
     '''
         Coming soon...
     '''
+    fn_name = 'APP.PY'
 
     # Convert ISO8601 to Lastline format
     last_pull = datetime.strptime(db.last_pull(), "%Y-%m-%dT%H:%M:%S%z")
@@ -450,14 +508,14 @@ def analyze_reports():
         db_record = db.get_record('reports', task_uuid=task_uuid)
 
         if db_record is None and 'sha256' in report['analysis_subject']:
-            log.info('[APP.PY] Found a new report that did not originate from CBC.')
+            log.info('[%s] Found a new report that did not originate from CBC.', fn_name)
             sha256 = report['analysis_subject']['sha256']
 
-            log.info('[APP.PY] Adding Report for SHA256 {0} with task_uuid {1} to the database.'.format(sha256, task_uuid))
+            log.info('[%s] Adding Report for SHA256 {0} with task_uuid {1} to the database.'.format(sha256, task_uuid), fn_name)
             # Add the report so we don't duplicate a search for it
             db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=report)
 
-            log.info('[APP.PY] Searching for any processes with SHA256 {0}'.format(sha256))
+            log.info('[%s] Searching for any processes with SHA256 {0}'.format(sha256), fn_name)
             # Update the search_body with a query now that we have the sha256
             search_body['query'] = 'process_hash:{0}'.format(sha256)
             processes = cb.get_processes(search_body)
@@ -474,9 +532,8 @@ def analyze_reports():
             log.info(json.dumps(db_record, indent=4))
         
         if 'sha256' not in report['analysis_subject']:
-            log.info('[APP.PY] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid))
+            log.info('[%s] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid), fn_name)
         # sha256 = report['analysis_subject']['sha256']
-
 
 
 def main():
@@ -487,7 +544,7 @@ def main():
     analyze_processes()
 
     # Get all detonations from Lastline Sandbox and search for processes matching bad files
-    analyze_reports()
+    # analyze_reports()
 
     # Once all of the reports and processes have been analyzed, check to see if any new IOCs
     #   are cached and waiting to be added to the watchlist. If so, add them.

@@ -1030,8 +1030,44 @@ class Lastline:
 
         # If the request was successful
         if r.status_code == 200:
+            response = r.json()
+            if response['success'] == 1:
+                data = response['data']
+                self.log.info('[%s] Found report for task_uuid {0}'.format(uuid), self.class_name)
+                return data
+            
+            else:
+                self.log.info('[%s] No task with uuid {0}'.format(uuid), self.class_name)
+                return None
+        
+        else:
+            self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
+            return None
+
+    def get_results(self, uuid):
+        '''
+            !!! Coming soon...
+            [] check to see if 
+        '''
+
+        # !!! check to make sure uuid is a string
+
+        self.log.info('[%s] Getting reports for task_uuid {0}'.format(uuid), self.class_name)
+
+        # Define the request basics
+        url = '/'.join([self.url, 'analysis/get'])
+        params = {
+            'uuid': uuid
+        }
+        params.update(self.auth)
+
+        # Request the data from the endpoint
+        r = requests.post(url, headers=self.headers, params=params)
+
+        # If the request was successful
+        if r.status_code == 200:
             data = r.json()['data']
-            self.log.info('[%s] Found report for task_uuid {0}'.format(uuid), self.class_name)
+            self.log.info('[%s] Found reports for task_uuid {0}'.format(uuid), self.class_name)
             return data
         
         else:
@@ -1342,7 +1378,7 @@ class Database:
         sql_filter_keys = ' AND '.join(sql_filter_keys)
 
         try:
-            sql = 'SELECT * FROM {0} WHERE {1};'.format(table, sql_filter_keys)
+            sql = 'SELECT * FROM {0} WHERE {1}'.format(table, sql_filter_keys)
             self.log.info('[%s] Getting record(s) with filter(s): {0} {1}'.format(sql, sql_filter_values), self.class_name)
 
             cursor = self.conn.cursor()
@@ -1438,12 +1474,12 @@ class Database:
                 Exception if not connection exists
 
             Output
-                data (list):    Returns the results of the new row
+                data (int):    Returns the number of rows affected
         '''
         if self.conn is None:
             raise Exception('No connection to database')
 
-        timestamp = convert_time('now')
+        # timestamp = convert_time('now')
 
         if table == 'processes':
             if 'sha256' not in data:
@@ -1456,11 +1492,23 @@ class Database:
                 raise ValueError('[%s] Missing required process_guid', self.class_name)
             if isinstance(data['process_guid'], str) is False:
                 raise TypeError('process_guid must be a string')
-            if self.get_record(table, process_guid=data['process_guid']):
-                raise Exception('Process already exists: {0}'.format(data['process_guid']))
+            if self.get_record(table, process_guid=data['process_guid']) is None:
+                raise Exception('Process does not exists: {0}'.format(data['process_guid']))
 
-            sql_values = (timestamp, data['sha256'], data['process_guid'], data['status'],)
-            sql_query = 'INSERT INTO {0}(timestamp,sha256,process_guid,status) VALUES(?,?,?,?)'.format(table)
+            # !! remove later
+            # sql_query = 'UPDATE {0} SET timestamp = ?, sha256 = ?, process_guid = ?, status = ? WHERE process_guid = ?'.format(table)
+            # sql_values = (timestamp, data['sha256'], data['process_guid'], data['status'], data['process_guid'],)
+            sql_updates = []
+            for key in data.keys():
+                sql_updates.append('{0} = ?'.format(key))
+            sql_updates = ', '.join(sql_updates)
+            sql_query = 'UPDATE {0} SET {1} WHERE process_guid = ?'.format(table, sql_updates)
+            sql_values = []
+            for item in data:
+                sql_values.append(data[item])
+            sql_values.append(data['process_guid'])
+            sql_values = tuple(sql_values)
+            self.log.info('[%s] Updating processes with this query: {0} {1}'.format(sql_query, sql_values), self.class_name)
 
         if table == 'reports':
             if 'sha256' not in data:
@@ -1469,8 +1517,8 @@ class Database:
                 raise TypeError('[%s] Expected sha256 input type is string.', self.class_name)
             if len(data['sha256']) != 64:
                 raise ValueError('[%s] The sha256 provided is not 64 characters long: {0}.'.format(data['sha256']), self.class_name)
-            if self.get_record(table, sha256=data['sha256']):
-                raise Exception('Hash already exists: {0}'.format(data['sha256']))
+            if self.get_record(table, sha256=data['sha256']) is None:
+                raise Exception('Hash does not exists: {0}'.format(data['sha256']))
             if 'status' not in data:
                 raise ValueError('[%s] Missing required filed of status', self.class_name)
             if 'task_uuid' not in data:
@@ -1478,16 +1526,31 @@ class Database:
             if 'reports' not in data:
                 raise ValueError('[%s] Missing required filed of reports', self.class_name)
 
+            # !! remove later
             # sql_query = 'INSERT INTO {0}(timestamp,status,task_uuid,reports) VALUES(?,?,?,?) WHERE sha256 = ?'.format(table)
-            sql_query = 'UPDATE {0} SET timestamp = ?, status = ?, task_uuid = ?, reports = ? WHERE sha256 = ?'
-            sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
+            sql_updates = []
+            for key in data.keys():
+                sql_updates.append('{0} = ?'.format(key))
+            sql_updates = ', '.join(sql_updates)
+            sql_query = 'UPDATE {0} SET {1} WHERE sha256 = ?'.format(table, sql_updates)
+            sql_values = []
+            for item in data:
+                if item == 'reports':
+                    sql_values.append(json.dumps(data[item]))
+                else:
+                    sql_values.append(data[item])
+            sql_values.append(data['sha256'])
+            sql_values = tuple(sql_values)
+            self.log.info('[%s] Updating reports with this query: {0} {1}'.format(sql_query, sql_values))
+
+            # sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
 
         try:
             cur = self.conn.cursor()
             cur.execute(sql_query, sql_values)
             self.conn.commit()
 
-            return cur.lastrowid
+            return cur.rowcount
 
         except Exception as err:
             self.log.exception(err)
