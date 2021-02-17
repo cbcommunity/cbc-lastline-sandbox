@@ -298,8 +298,10 @@ def analyze_processes():
 
     # Enable debugging
     # * Used for debugging. This will limit the search to only the process hash defined
-    if config['debug']['cb_sample_hash'] is not None:
-        query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
+    if 'debug' in config:
+        if 'cb_sample_hash' in config['debug']:
+            if config['debug']['cb_sample_hash'] is not None:
+                query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
 
     # Build the request body
     # ! This has a test device hard coded to prevent tampering with other endpoints
@@ -508,7 +510,7 @@ def analyze_reports():
         db_record = db.get_record('reports', task_uuid=task_uuid)
 
         if db_record is None and 'sha256' in report['analysis_subject']:
-            log.info('[%s] Found a new report that did not originate from CBC.', fn_name)
+            log.info('[%s] Found a new report that did not originate from this script.', fn_name)
             sha256 = report['analysis_subject']['sha256']
 
             log.info('[%s] Adding Report for SHA256 {0} with task_uuid {1} to the database.'.format(sha256, task_uuid), fn_name)
@@ -532,7 +534,7 @@ def analyze_reports():
             log.info(json.dumps(db_record, indent=4))
         
         if 'sha256' not in report['analysis_subject']:
-            log.info('[%s] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid), fn_name)
+            log.warn('[%s] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid), fn_name)
         # sha256 = report['analysis_subject']['sha256']
 
 
@@ -544,7 +546,7 @@ def main():
     analyze_processes()
 
     # Get all detonations from Lastline Sandbox and search for processes matching bad files
-    # analyze_reports()
+    analyze_reports()
 
     # Once all of the reports and processes have been analyzed, check to see if any new IOCs
     #   are cached and waiting to be added to the watchlist. If so, add them.
