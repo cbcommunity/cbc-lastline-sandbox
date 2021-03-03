@@ -344,7 +344,7 @@ def analyze_processes():
     for process in processes['results']:
         process_guid = process['process_guid']
         sha256 = process['process_sha256']
-        take_action = False
+        action_required = False
 
         # Check to see if this process has already been inspected
         process_record = db.get_record('processes', process_guid=process_guid)
@@ -383,13 +383,13 @@ def analyze_processes():
                             if task['score'] >= int(config['Lastline']['action_threashold']):
                                 log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
                                 # * take_action
-                                take_action = True
+                                action_required = True
 
                     else:
                         if reports['score'] >= int(config['Lastline']['action_threashold']):
                             log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
                             # * take_action
-                            take_action = True
+                            action_required = True
                         
                     # * Save PROCESS to the local database as COMPLETE
                     db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
@@ -402,7 +402,7 @@ def analyze_processes():
                     if ll_result is not None:
                         if ll_result['score'] >= int(config['Lastline']['action_threashold']):
                             log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
-                            take_action = True
+                            action_required = True
 
                         else:
                             log.info('[%s] Report score for {0} is {1}. Not high enough to take action.'.format(task_uuid, ll_result['score']), fn_name)
@@ -432,7 +432,7 @@ def analyze_processes():
                             task['report'] = ll.get_result(task_uuid)
 
                             # !!! add report to database
-                            take_action = True
+                            action_required = True
 
                     db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_lookup)
                     db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
@@ -462,9 +462,9 @@ def analyze_processes():
                         log.warning('[%s] UBS is only available on Windows devices. This device is {0}'.format(process['device_os']), fn_name)
                         db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
             
-            if take_action:
+            if action_required:
                 log.debug('[%s] Taking action on process "{0}"'.format(process_guid))
-                # !! take_action(reports, sha256, process)
+                take_action(reports, sha256, process)
 
         # If it HAS been inspected
         else:
@@ -526,7 +526,7 @@ def analyze_reports():
                 proc_record = db.get_record('processes', process_guid=process['process_guid'])
                 if proc_record is None:
                     print('take_action(report, {0}, {1})'.format(sha256, process['device_id']))
-                    # take_action(report, sha256, process)
+                    take_action(report, sha256, process)
                     db.add_record('processes', sha256=sha256, process_guid=process['process_guid'], status='complete')
 
         if db_record is not None:

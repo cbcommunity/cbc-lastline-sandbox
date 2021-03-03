@@ -11,7 +11,16 @@ This is an integration between Lastline's TAP product and VMware Carbon Black Cl
 
 This is an integration between **Lastline Sandbox** and **VMware Carbon Black Cloud** (CBC).
 
-Description coming soon...
+The integration with CBC has 2 phases:
+
+1. CBC to Lastline
+    - Pull all Processes with File Reputation of NOT_LISTED (configurable in the config.conf).
+    - Query Lastline for any previous sandbox reports for the hash.
+    - If the file has been detonated and it is malicious, take action. This applies to Endpoint Standard or EEDR.
+    - If the file hasn't been detonated yet by Lastline, and if Upload all new binaries to CB is enabled, pull the binary from CBC and send to Lastline for detonation. This only applies to EEDR.
+2. Lastline to CBC
+    - Every 30 minutes query Lastline for any new detonations.
+    - Search CBC for any Processes matching the report hashes and take action.
 
 Action options consist of:
    - Adding to a CBC Enterprise EDR Watchlist Feed
@@ -26,7 +35,7 @@ Action options consist of:
     - Lastline Sandbox
 
 ## License
-Use of the Carbon Black API is governed by the license found in the [LICENSE.md](https://github.com/cbcommunity/cbc-proofpoint-malicous-file-detection/blob/main/LICENSE.md) file.
+Use of the Carbon Black API is governed by the license found in the [LICENSE.md](https://github.com/cbcommunity/cbc-lastline-sandbox/blob/main/LICENSE.md) file.
 
 ## Support
 This integration is an open sourced project. Please submit a Pull Request for any changes.
@@ -61,6 +70,7 @@ You will need to create 1 API Access Level and 3 API keys
 | Device            | General Information | device             |                         | :ballot_box_with_check: |                         |            |                         |
 | Device            | Policy Assignment   | device.policy      |                         |                         | :ballot_box_with_check: |            |                         |
 | Search            | Events              | org.search.events  | :ballot_box_with_check: | :ballot_box_with_check: |                         |            |                         |
+| Universal Binary Store | File           | ubs.org.file       |                         | :ballot_box_with_check: |                         |            |                         |
 
 #### Access Levels (API key type)
 1. Custom [select your Custom Access Level]
@@ -88,13 +98,11 @@ The Organization Key can be found in the upper-left of the **Settings** > **API 
 Coming soon...
 
 
-| **Proofpoint**  | **Configure Proofpoint TAP**   |
+| **Lastline**  | **Configure Lastline**   |
 |:----------------|:-------------------------------|
-| `url`           | URL for Proofpoint             |
+| `url`           | URL for Lastline               |
 | `api_key`       | API Key                        |
-| `principal`     | Login Username                 |
-| `secret`        | Login Password                 |
-| `delta`         | Duration of time to search for delivered messages. Max 1 hour |
+| `api_token`     | API Token                      |
 
 ----
 
@@ -132,7 +140,7 @@ The script has the following CLI options:
 
 The `--last_pull` option overwrites the `last_pull` value stored in the database and will pull CBC Endpoint Standard or CBC Enterprise EDR processes since that time.
 
-To manually specify a timeframe (min 30 seconds, max 1 hour) use the `--start-time` and `--end-time` arguments.
+To manually specify a timeframe use the `--start-time` and `--end-time` arguments.
 
 ### Examples
 
@@ -148,7 +156,7 @@ Specify start date:
 
 A Dockerfile is included. First build the image using the following command from the project's root folder:
 
-    docker build -t cbc-proofpoint .
+    docker build -t cbc-lastline-sandbox .
 
 Make sure your [app/config.conf](https://github.com/cbcommunity/cbc-lastline-sandbox/blob/main/app/config.conf) file is populated with the correct values.
 
