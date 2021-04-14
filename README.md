@@ -4,7 +4,7 @@
 This is an integration between Lastline's TAP product and VMware Carbon Black Cloud (CBC).
 
 **Latest Version:** v0.9  
-**Release Date:** Q2 2021
+**Release Date:** March 2021
 
 
 ## Overview
