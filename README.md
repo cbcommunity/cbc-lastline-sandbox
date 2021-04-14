@@ -95,7 +95,7 @@ The Organization Key can be found in the upper-left of the **Settings** > **API 
 
 ### Lastline Configuration
 
-Coming soon...
+To configure the integration with Lastline, the `url`, `api_key`, and `api_token` fields are required.
 
 
 | **Lastline**  | **Configure Lastline**   |
@@ -103,6 +103,20 @@ Coming soon...
 | `url`           | URL for Lastline               |
 | `api_key`       | API Key                        |
 | `api_token`     | API Token                      |
+
+----
+
+### NSX Configuration
+
+An optional action is to add a NSX tag to a device. This could be used to isolate the endpoint on a VLAN, enable certain features to inspect network traffic, or just segreate for investigation.
+
+Ensure to add a tag to the `actions` section if you complete this section.
+
+| **NSX**    | **Configure NSX** |
+|------------|-------------------|
+| `url`      | URL for NSX       |
+| `username` | API username      |
+| `password` | API password      |
 
 ----
 
@@ -124,6 +138,7 @@ When a process with the a malicious hash is detected, actions are triggered. By 
 | `script`            | A script to execute                |
 | `isolate`           | Isolate the endpoint?              |
 | `policy`            | Policy to move offending devices   |
+| `nsx_tag`           | Add a NSX tag to the device        |
 
 ## Running the Script
 
