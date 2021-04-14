@@ -11,13 +11,14 @@ import json
 from datetime import datetime, timedelta
 
 # Import helpers
-from lib.helpers import CarbonBlackCloud, Lastline, Database, convert_time, str2bool, config2dict
+from lib.helpers import CarbonBlackCloud, Lastline, NSX, Database, convert_time, str2bool, config2dict
 
 # Globals
 config = None
 db = None
 cb = None
 ll = None
+nsx = None
 
 def init():
     '''
@@ -97,7 +98,11 @@ def init():
     # Init Lastline
     ll = Lastline(config, log)
 
-    return config, db, cb, ll
+    # Init NSX if enabled
+    if ('NSX' in config):
+        nsx = NSX(config, log)
+
+    return config, db, cb, ll, nsx
 
 
 def take_action(report, sha256, cb_processes):
@@ -217,6 +222,19 @@ def take_action(report, sha256, cb_processes):
         # Change device's policy
         if 'policy' in actions and actions['policy'] is not None:
             cb.update_policy(device_id, actions['policy'])
+
+        # Add an NSX tag to the device
+        if 'nsx_tag' in actions and actions['nsx_tag'] is not None:
+            if nsx is None:
+                raise Exception('[APP.PY] NSX is not configured. Cannot add tag to device.')
+            
+            # Get the NSX resource_id based on CB's device_name
+            resource_id = nsx.search_devices(process['device_name'])
+            # Add the NSX tag to the resource_id
+            add_tag = nsx.add_tag(resource_id, actions['nsx_tag'])
+
+            if add_tag:
+                log.info('[APP.PY] Added tag {0} to device with resource_id {1}'.format(action['nsx_tag'], resource_id))
 
         # db.add_record(device_id, process_guid, sha256)
 
