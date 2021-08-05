@@ -105,7 +105,7 @@ def init():
     return config, db, cb, ll, nsx
 
 
-def take_action(report, sha256, cb_processes):
+def take_action(report, sha256, process):
     '''
         This method will identify which actions are enabled in the config file
             and execute each appropriately.
@@ -121,7 +121,6 @@ def take_action(report, sha256, cb_processes):
             cb: An object with everything needed for this script to work with CarbonBlack Cloud
             pp: An object with everything needed for this script to work with Lastline endpoints
     '''
-
     # Populate actions with either None or the action defined
     actions = {}
     for action in config['actions']:
@@ -133,29 +132,20 @@ def take_action(report, sha256, cb_processes):
     # The watchlist action should only be run once per hash, not per process
     # Create/update watchlist feed
     if 'watchlist' in actions and actions['watchlist'] is not None:
-        # The threats are in an array. We need to figure out which one
-        #   represents the hash being processed
-        for threat in report['threatsInfoMap']:
-            if threat['threat'] == sha256:
-                break
-
         # Build the Report arguments
         timestamp = convert_time(convert_time('now'))
-        title = '{} {} {}: {}'.format(threat['threatStatus'],
-                                      threat['classification'],
-                                      threat['threatType'], sha256)
-
-        # !!! need to populate threat feed description
-        description = 'A description can go here.'
+        title = '{0}'.format(sha256)
+        description = '. '.join(report['malicious_activity'])
+        description = '{0} - https://user.lastline.com/portal#/analyst/task/{1}/overview'.format(description, report['task_uuid'])
+        tags = []
 
         # Lastline's scoring is 0-100, CBC EEDR is 1-10
-        if report['malwareScore'] == 0:
+        if report['score'] == 0:
             severity = 1
         else:
-            severity = round(report['malwareScore'] / 10)
+            severity = round(report['score'] / 10)
 
-        url = threat['threatUrl']
-        tags = [threat['threatStatus'], threat['threatType'], threat['classification']]
+        url = 'https://user.lastline.com/portal#/analyst/task/{0}/overview'.format(report['task_uuid'])
 
         # Get the feed ready
         if cb.iocs is None:
@@ -178,63 +168,56 @@ def take_action(report, sha256, cb_processes):
 
     # The rest of the actions we want to run once per process, not per hash
     # Save a list of devices so we don't run the action on a device twice
-    for process in cb_processes:
-        device_id = int(process['device_id'])
-        process_guid = process['process_guid']
+    device_id = int(process['device_id'])
+    process_guid = process['process_guid']
 
-        records = db.get_record('processes', process_guid=process_guid)
-
-        # If the process has already been analyzed, skip it
-        if records is not None:
-            continue
-
-        # Send data to webhook
-        if 'webhook' in actions and actions['webhook'] is not None:
-            try:
-                url = actions['webhook']
-                headers = {
-                    'Content-Type': 'application/json'
-                }
-                body = {
-                    'report': report,
-                    'sha256': sha256,
-                    'process': process
-                }
-                r = requests.post(url, headers=headers, json=body)
-                
-                if str(r.status_code()[0]) == '2':
-                    log.info('[APP.PY] Sent data to webhook.\nRecieved {0}: {1}'.format(r.status_code, r.text))
-
-                else:
-                    log.warning('[APP.PY] {0}: {1}'.format(r.status_code, r.text))
-            except Exception as error:
-                log.error('[APP.PY] {0}'.format(error))
-
-        # Run a script
-        if 'script' in actions and actions['script'] is not None:
-            process_pid = process['process_pid'][0]
-            action_script(device_id, pid=process_pid, file_path=process['process_name'])
-
-        # Isolate endpoint
-        if 'isolate' in actions and str2bool(actions['isolate']):
-            cb.isolate_device(device_id)
-
-        # Change device's policy
-        if 'policy' in actions and actions['policy'] is not None:
-            cb.update_policy(device_id, actions['policy'])
-
-        # Add an NSX tag to the device
-        if 'nsx_tag' in actions and actions['nsx_tag'] is not None:
-            if nsx is None:
-                raise Exception('[APP.PY] NSX is not configured. Cannot add tag to device.')
+    # Send data to webhook
+    if 'webhook' in actions and actions['webhook'] is not None:
+        try:
+            url = actions['webhook']
+            headers = {
+                'Content-Type': 'application/json'
+            }
+            body = {
+                'report': report,
+                'sha256': sha256,
+                'process': process
+            }
+            r = requests.post(url, headers=headers, json=body)
             
-            # Get the NSX resource_id based on CB's device_name
-            resource_id = nsx.search_devices(process['device_name'])
-            # Add the NSX tag to the resource_id
-            add_tag = nsx.add_tag(resource_id, actions['nsx_tag'])
+            if str(r.status_code()[0]) == '2':
+                log.info('[APP.PY] Sent data to webhook.\nRecieved {0}: {1}'.format(r.status_code, r.text))
 
-            if add_tag:
-                log.info('[APP.PY] Added tag {0} to device with resource_id {1}'.format(action['nsx_tag'], resource_id))
+            else:
+                log.warning('[APP.PY] {0}: {1}'.format(r.status_code, r.text))
+        except Exception as error:
+            log.error('[APP.PY] {0}'.format(error))
+
+    # Run a script
+    if 'script' in actions and actions['script'] is not None:
+        process_pid = process['process_pid'][0]
+        action_script(device_id, pid=process_pid, file_path=process['process_name'])
+
+    # Isolate endpoint
+    if 'isolate' in actions and str2bool(actions['isolate']):
+        cb.isolate_device(device_id)
+
+    # Change device's policy
+    if 'policy' in actions and actions['policy'] is not None:
+        cb.update_policy(device_id, actions['policy'])
+
+    # Add an NSX tag to the device
+    if 'nsx_tag' in actions and actions['nsx_tag'] is not None:
+        if nsx is None:
+            raise Exception('[APP.PY] NSX is not configured. Cannot add tag to device.')
+        
+        # Get the NSX resource_id based on CB's device_name
+        resource_id = nsx.search_devices(process['device_name'])
+        # Add the NSX tag to the resource_id
+        add_tag = nsx.add_tag(resource_id, actions['nsx_tag'])
+
+        if add_tag:
+            log.info('[APP.PY] Added tag {0} to device with resource_id {1}'.format(action['nsx_tag'], resource_id))
 
         # db.add_record(device_id, process_guid, sha256)
 
@@ -243,12 +226,10 @@ def action_script(device_id, pid=None, file_path=None):
     '''
         This method take the command from the config file and runs the provided script.
         This method should be customized to fit any unique needs for a custom action script.
-
         Inputs:
             device_id: The id of the device to connect to. This should be an integer
             pid: The id of the process to kill if it is running. This should be an integer
             file_path: The path to the file that should be deleted if found. This should be a string
-
         Outputs:
             All outputs are directed to the log file configured in the config file under the logging section
     '''
@@ -271,14 +252,15 @@ def action_script(device_id, pid=None, file_path=None):
     script = script.split(' ')
 
     # This is the command that is sent, with the arguments
-    cmd = [os.path.join(script_cwd, script[0])]
+    script_cmd = script[0]
+    cmd = [script_cmd, os.path.join(script_cwd, script[1])]
 
     # The command and arguments are passed as an array to the script execution where each argument is an
     #   item in the array. Some of the args could have spaces (like file_path). This section will concatenate
     #   arguments as a string and correctly organize them by items in the array
     args = []
     arg_tmp = []
-    for arg in script[1:]:
+    for arg in script[2:]:
         # If the first 2 chars are --, it is an arg key
         if arg[0:2] == '--':
             # Add any arg values and clear the cache
@@ -314,21 +296,9 @@ def analyze_processes():
     reputations = reputations.replace(',', ' OR process_effective_reputation:')
     query = 'process_effective_reputation:{0}'.format(reputations)
 
-    # Enable debugging
-    # * Used for debugging. This will limit the search to only the process hash defined
-    if 'debug' in config:
-        if 'cb_sample_hash' in config['debug']:
-            if config['debug']['cb_sample_hash'] is not None:
-                query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
-
     # Build the request body
-    # ! This has a test device hard coded to prevent tampering with other endpoints
     search_body = {
         'query': query,
-        'criteria': {
-            'device_os': ['WINDOWS'],
-            'device_id': ['3984889']
-        },
         'fields': [
             '*',
             'device_os',
@@ -348,8 +318,16 @@ def analyze_processes():
         }
     }
 
-    search_body['query'] = query
-    # !! convert this to a JSON string
+    # Enable debugging
+    # * Used for debugging. This will limit the search to only the process hash defined
+    if 'debug' in config:
+        if 'cb_sample_hash' in config['debug'] and config['debug']['cb_sample_hash'] != '':
+            query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
+        if 'device_id' in config['debug'] and config['debug']['device_id'] != '':
+            query = '({0}) AND device_id:{1}'.format(query, config['debug']['device_id'])
+    
+        search_body['query'] = query
+
     log.debug('[%s] Created query to search for processes: {0}'.format(search_body), fn_name)
 
     # Run the search and get results
@@ -399,13 +377,13 @@ def analyze_processes():
                         for task in reports['tasks']:
                             # * Is the score > the action_threashold?
                             if task['score'] >= int(config['Lastline']['action_threashold']):
-                                log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
+                                log.warning('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256), fn_name)
                                 # * take_action
                                 action_required = True
 
                     else:
                         if reports['score'] >= int(config['Lastline']['action_threashold']):
-                            log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
+                            log.warning('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256), fn_name)
                             # * take_action
                             action_required = True
                         
@@ -415,12 +393,18 @@ def analyze_processes():
                 # If the hash is still pending
                 else:
                     log.info('[%s] Hash "{0}" is still pending in the database.'.format(sha256), fn_name)
-                    ll_result = ll.get_result(task_uuid)
+                    ll_result = ll.query_hash(sha256=sha256)                    
 
                     if ll_result is not None:
-                        if ll_result['score'] >= int(config['Lastline']['action_threashold']):
-                            log.warn('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256))
-                            action_required = True
+                        # Dig for the report on our hash
+                        report = ll.find_report(ll_result, sha256)
+    
+                        if report is None:
+                            continue
+                        # Update report in db
+                        if report['score'] >= int(config['Lastline']['action_threashold']):
+                            log.warning('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256), fn_name)
+                            take_action(report, sha256, process)
 
                         else:
                             log.info('[%s] Report score for {0} is {1}. Not high enough to take action.'.format(task_uuid, ll_result['score']), fn_name)
@@ -437,22 +421,20 @@ def analyze_processes():
             else:
                 # Check to see if it HAS already been detonated in Lastline
                 ll_lookup = ll.query_hash(sha256=sha256)
-                # print(ll_lookup)
 
                 # If the file HAS been detonated, save the results locally
                 if ll_lookup['files_found'] > 0:
                     for task in ll_lookup['tasks']:
-                        score = task['score']
-                        task_uuid = task['task_uuid']
+                        report = ll.find_report(ll_lookup, sha256)
+                        break
 
-                        if score >= int(config['Lastline']['action_threashold']):
-                            # Get the report
-                            task['report'] = ll.get_result(task_uuid)
+                    score = report['score']
+                    task_uuid = report['task_uuid']
 
-                            # !!! add report to database
-                            action_required = True
+                    if score >= int(config['Lastline']['action_threashold']):
+                        take_action(report, sha256, process)
 
-                    db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_lookup)
+                    db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=report)
                     db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
 
                 # If the file HAS NOT been detonated
@@ -482,7 +464,7 @@ def analyze_processes():
             
             if action_required:
                 log.debug('[%s] Taking action on process "{0}"'.format(process_guid))
-                take_action(reports, sha256, process)
+                
 
         # If it HAS been inspected
         else:
@@ -543,17 +525,16 @@ def analyze_reports():
             for process in processes:
                 proc_record = db.get_record('processes', process_guid=process['process_guid'])
                 if proc_record is None:
-                    print('take_action(report, {0}, {1})'.format(sha256, process['device_id']))
                     take_action(report, sha256, process)
                     db.add_record('processes', sha256=sha256, process_guid=process['process_guid'], status='complete')
 
         if db_record is not None:
-            print(json.dumps(db_record, indent=4))
             log.info(json.dumps(db_record, indent=4))
         
-        if 'sha256' not in report['analysis_subject']:
-            log.warn('[%s] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid), fn_name)
-        # sha256 = report['analysis_subject']['sha256']
+            if 'sha256' not in report['analysis_subject']:
+                log.warning('[%s] Report is missing SHA256. Skipping report with task_uuid {0}'.format(task_uuid), fn_name)
+                log.warning(json.dumps(report, indent=4))
+            # sha256 = report['analysis_subject']['sha256']
 
 
 def main():
@@ -564,7 +545,7 @@ def main():
     analyze_processes()
 
     # Get all detonations from Lastline Sandbox and search for processes matching bad files
-    analyze_reports()
+    # analyze_reports()
 
     # Once all of the reports and processes have been analyzed, check to see if any new IOCs
     #   are cached and waiting to be added to the watchlist. If so, add them.

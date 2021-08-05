@@ -8,6 +8,7 @@ __pycache__/
 
 .python-version
 .theia
+.vscode
 .DS_Store
 
 # Integration specific

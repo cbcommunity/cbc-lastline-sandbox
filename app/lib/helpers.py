@@ -45,7 +45,10 @@ class CarbonBlackCloud:
             self.headers = {
                 'Content-Type': 'application/json',
                 'Cache-Control': 'no-cache',
-                'User-Agent': config['user_agent']
+                'User-Agent': '{0} / {1} {2} / {3}'.format(config['about']['name'],
+                                                           config['about']['name'],
+                                                           config['about']['version'],
+                                                           config['about']['author'])
             }
             self.feed = None
             self.iocs = None
@@ -107,8 +110,6 @@ class CarbonBlackCloud:
         url = '/'.join([self.url, 'api/investigate/v2/orgs', self.org_key, 'processes/search_jobs'])
         headers = self.headers
         headers['X-Auth-Token'] = '{0}/{1}'.format(self.cust_api_key, self.cust_api_id)
-
-        # print('### {0}'.format(json.dumps(body, indent=4)))
 
         # Request the data from the endpoint
         r = requests.post(url, headers=headers, data=json.dumps(body))
@@ -1010,8 +1011,17 @@ class Lastline:
 
     def get_result(self, uuid):
         '''
-            !!! Coming soon...
-            [] check to see if 
+            This method gets the result of a task.
+            
+            Inputs:
+                uuid: the task uuid
+            
+            Raises:
+                Exception when the http request fails
+            
+            Returns:
+                None if the report wasn't found
+                A dict of the report for the given uuid if the report exists
         '''
 
         # !!! check to make sure uuid is a string
@@ -1127,6 +1137,29 @@ class Lastline:
         
         else:
             self.log.exception('[%s] Error: {0} {1}'.format(r.status_code, r.text))
+
+    def find_report(self, report, sha256):
+        '''
+        A task may have one or more child_tasks. Our report for the sha256 is somewhere in there.
+        This function uses recursion to loop through the child_tasks until it finds the report for
+          the sha256.
+        '''
+        
+        if 'analysis_subject' in report:
+            if 'sha256' in report['analysis_subject']:
+                if report['analysis_subject']['sha256'] == sha256:
+                    return report
+
+        if 'tasks' in report:
+            for task in report['tasks']:
+                if task['file_sha256'] == sha256:
+                    report = self.get_result(task['task_uuid'])
+                    return self.find_report(report, sha256)
+
+        if 'child_tasks' in report:
+            for child_task in report['child_tasks']:
+                child_report = self.get_result(child_task['task_uuid'])
+                return self.find_report(child_report, sha256)
 
 
 class NSX:

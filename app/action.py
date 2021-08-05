@@ -1,34 +1,46 @@
+#!/bin/sh
+# -*- coding: utf-8 -*-
+# Copyright 2021 VMware, Inc.
+# SPDX-License-Identifier: MIT
+
+import os
+import re
 import sys
+import json
 import argparse
 import configparser
 import logging as log
 
 from time import sleep
 
-from lib.helpers import CarbonBlackCloud
-
-log.basicConfig(filename='app.log', format='[%(asctime)s] <pid:%(process)d> %(message)s', level=log.DEBUG)
-log.info('Sarted action script')
-
+from lib.helpers import CarbonBlackCloud, config2dict
 
 def init():
-    log.debug('Initializing script')
+    app_path = os.path.dirname(os.path.realpath(__file__))
+    config_path = os.path.join(app_path, 'config.conf')
+    if os.path.isfile(config_path) is False:
+        raise Exception('[ACTION.PY] Unable to find config.conf in {0}'.format(app_path))
 
-    # Get configs
-    log.debug('Getting configs')
+    # Get setting from config.ini
     config = configparser.ConfigParser()
-    config.read('config.conf')
-    log.debug('Finished getting configs')
+    config.read(config_path)
+    config = config2dict(config)
+
+    # Configure logging
+    log_level = log.getLevelName(config['logging']['level'])
+    log_path = os.path.join(app_path, config['logging']['filename'])
+    log.basicConfig(filename=log_path, format='[%(asctime)s] %(levelname)s <pid:%(process)d> %(message)s', level=log_level)
+    log.info('\n[ACTION.PY] Initializing script')
 
     # Get inputs
-    log.debug('Getting cli inputs')
+    log.debug('[ACTION.PY] Getting cli inputs')
     parser = argparse.ArgumentParser(description='Take action on an endpoint via LiveResponse')
     parser.add_argument("--device_id", help='Log activity to a file', required=True)
     parser.add_argument('--pid', help='Process ID to kill if running', required=True)
     parser.add_argument('--file_path', help='Process path to delete the file', default=None)
     parser.add_argument('--close', action='store_true', default=False, help='Close the session when script completes')
     args = parser.parse_args()
-    log.debug('Finished cli inputs')
+    log.debug('[ACTION.PY] Finished cli inputs')
 
     # Init CarbonBlack
     cb = CarbonBlackCloud(config, log)
@@ -42,6 +54,8 @@ def main():
     device_id = int(args.device_id)
     pid = args.pid
     file_path = args.file_path
+
+    log.info('[ACTION.PY] Starting Live Response session with device {}'.format(device_id))
 
     # Check to see if Live Response is enabled on the endpoint
     device_info = cb.get_device(device_id)
@@ -68,32 +82,52 @@ def main():
 
 
     # If LR is enabled, start LR flow
-    cb.start_session(device_id, wait=True)
+    lr_session = cb.start_session(device_id, wait=True)
+    if lr_session is False:
+        log.error('[ACTION.PY] Unable to start Live Response session')
+        sys.exit(1)
 
-    log.debug('[Main] Connected to endpoint: {0}'.format(device_id))
+
+    log.info('[ACTION.PY] Connected to endpoint: {0}'.format(device_id))
 
     # Check to see if the process is still running
     lr_command = cb.send_command('process list', wait=True)
+    if lr_command is False:
+        log.error('[ACTION.PY] Unable to send Live Response command')
+        sys.exit(1)
 
     found = False
+    
     for process in lr_command['processes']:
         if str(process['pid']) == pid:
-            log.debug('[Main] Process is running, killing process')
+            log.info('[ACTION.PY] Process is running, killing process')
 
             found = True
             # Send kill command
             lr_command = cb.send_command('kill', argument=pid, wait=True)
 
-    if found is False:
-        log.debug('[Main] Process {0} was not running on device {1}'.format(pid, device_id))
+        else:
+            # Also search for the file_path in the process list
+            clean_path = re.sub(r'\\\\', '\\\\', process['command_line'], 0, re.MULTILINE)
+            clean_path = clean_path.lower()
+            file_path = file_path.lower()
+            if clean_path.find(file_path) >= 0:
+                log.info('[ACTION.PY] Process is running, killing process')
 
-    # Send kill command
-    log.debug('[Main] Deleting file from endpoint')
+                found = True
+                # Send kill command
+                lr_command = cb.send_command('kill', argument=str(process['pid']), wait=True)                
+
+    if found is False:
+        log.info('[ACTION.PY] Process {0} was not running on device {1}'.format(pid, device_id))
+
+    # Send delete command
+    log.info('[ACTION.PY] Deleting file from endpoint')
     lr_command = cb.send_command('delete file', argument=file_path, wait=True)
 
     if args.close:
         cb.close_session()
-        log.debug('[Main] Closed session')
+        log.debug('[ACTION.PY] Closed session')
 
 
 if __name__ == "__main__":
