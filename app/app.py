@@ -447,12 +447,14 @@ def analyze_processes():
                         cb_binary = cb.get_binary(sha256)
 
                         if cb_binary is not None:
-                            binary_url = cb_binary['found'][0]['url']
-                            ll_submission = ll.submit_url(binary_url)
+                            if len(cb_binary['found']) > 0:
+                                binary_url = cb_binary['found'][0]['url']
+                                ll_submission = ll.submit_url(binary_url)
 
-                            db.add_record('reports', sha256=sha256, status='pending', task_uuid=ll_submission['task_uuid'], reports=ll_submission)
-                            db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
-
+                                db.add_record('reports', sha256=sha256, status='pending', task_uuid=ll_submission['task_uuid'], reports=ll_submission)
+                                db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
+                            else:
+                                log.warning('[%s] Unable to find binary for {0}'.format(sha256), fn_name)
                         else:
                             log.warning('[%s] Unable to find binary for {0}'.format(sha256), fn_name)
 

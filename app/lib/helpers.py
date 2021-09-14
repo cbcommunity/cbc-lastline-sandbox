@@ -1098,6 +1098,7 @@ class Lastline:
         if r.status_code == 200:
             data = r.json()['data']
             self.log.info('[%s] Submitted URL for analysis. Got task_uuid {0}'.format(data['task_uuid']), self.class_name)
+            self.log.debug('[%s] Use this URL to check the status of the file detonation: https://user.lastline.com/portal#/analyst/task/{0}'.format(data['task_uuid']), self.class_name)
             self.submits += 1
             return data
         
@@ -1676,7 +1677,7 @@ class Database:
                     sql_values.append(data[item])
             sql_values.append(data['sha256'])
             sql_values = tuple(sql_values)
-            self.log.info('[%s] Updating reports with this query: {0} {1}'.format(sql_query, sql_values))
+            self.log.info('[%s] Updating reports with this query: {0} {1}'.format(sql_query, sql_values), self.class_name)
 
             # sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
 
