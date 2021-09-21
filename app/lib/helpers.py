@@ -1141,9 +1141,9 @@ class Lastline:
 
     def find_report(self, report, sha256):
         '''
-        A task may have one or more child_tasks. Our report for the sha256 is somewhere in there.
-        This function uses recursion to loop through the child_tasks until it finds the report for
-          the sha256.
+            A task may have one or more child_tasks. Our report for the sha256 is somewhere in there.
+            This function uses recursion to loop through the child_tasks until it finds the report for
+            the sha256.
         '''
         
         if 'analysis_subject' in report:
@@ -1224,7 +1224,7 @@ class NSX:
 
         # If the request was successful
         if r.status_code == 200:
-            self.log.info('[%s] Pulled device information: {0}.'.format(device_id), self.class_name)
+            self.log.info('[%s] Pulled device information: {0}.'.format(device_name), self.class_name)
             data = r.json()
             return data
         
@@ -1631,9 +1631,6 @@ class Database:
             if self.get_record(table, process_guid=data['process_guid']) is None:
                 raise Exception('Process does not exists: {0}'.format(data['process_guid']))
 
-            # !! remove later
-            # sql_query = 'UPDATE {0} SET timestamp = ?, sha256 = ?, process_guid = ?, status = ? WHERE process_guid = ?'.format(table)
-            # sql_values = (timestamp, data['sha256'], data['process_guid'], data['status'], data['process_guid'],)
             sql_updates = []
             for key in data.keys():
                 sql_updates.append('{0} = ?'.format(key))
@@ -1662,8 +1659,6 @@ class Database:
             if 'reports' not in data:
                 raise ValueError('[%s] Missing required filed of reports', self.class_name)
 
-            # !! remove later
-            # sql_query = 'INSERT INTO {0}(timestamp,status,task_uuid,reports) VALUES(?,?,?,?) WHERE sha256 = ?'.format(table)
             sql_updates = []
             for key in data.keys():
                 sql_updates.append('{0} = ?'.format(key))
@@ -1678,8 +1673,6 @@ class Database:
             sql_values.append(data['sha256'])
             sql_values = tuple(sql_values)
             self.log.info('[%s] Updating reports with this query: {0} {1}'.format(sql_query, sql_values), self.class_name)
-
-            # sql_values = (timestamp, data['status'], data['task_uuid'], json.dumps(data['reports']), data['sha256'],)
 
         try:
             cur = self.conn.cursor()

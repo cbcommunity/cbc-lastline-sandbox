@@ -319,7 +319,7 @@ def analyze_processes():
     }
 
     # Enable debugging
-    # * Used for debugging. This will limit the search to only the process hash defined
+    # * Used for debugging. This will limit the search to only the hash or device_id defined
     if 'debug' in config:
         if 'cb_sample_hash' in config['debug'] and config['debug']['cb_sample_hash'] != '':
             query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
@@ -477,9 +477,12 @@ def analyze_processes():
 
 def analyze_reports():
     '''
-        Coming soon...
+        This method will check for Lastline file detonations that did not
+            originate from this integration. If a file was submitted, and
+            the score is over the limit, this will search for any processes
+            that ran in the last 2 weeks that match the SHA256 of the report.
     '''
-    fn_name = 'APP.PY'
+    fn_name = 'APP.py > analyze_reports()'
 
     # Convert ISO8601 to Lastline format
     last_pull = datetime.strptime(db.last_pull(), "%Y-%m-%dT%H:%M:%S%z")
