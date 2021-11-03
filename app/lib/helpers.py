@@ -1231,7 +1231,6 @@ class NSX:
         self.log.error('[%s] Error {0}: {1}'.format(r.status_code, r.text), self.class_name)
         raise Exception('Error {0}: {1}'.format(r.status_code, r.text))
 
-
     def add_tag(self, resource_id, tag_name):
         '''
             !!! comment here

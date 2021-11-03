@@ -291,14 +291,18 @@ def analyze_processes():
     fn_name = 'APP.PY'
 
     # Remove extra spaces
-    reputations = config['CarbonBlack']['reputation'].replace(' ', '')
+    reputations = config['CarbonBlack']['reputation'].replace(' ', '').split(',')
     # Start building the query
-    reputations = reputations.replace(',', ' OR process_effective_reputation:')
-    query = 'process_effective_reputation:{0}'.format(reputations)
+    # reputations = reputations.replace(',', ' OR process_effective_reputation:')
+    # reputations = reputations.replace(' ', '').split(',')
+    # query = 'process_effective_reputation:{0}'.format(reputations)
 
     # Build the request body
     search_body = {
-        'query': query,
+        'criteria': {
+            'process_effective_reputation': reputations,
+            'device_os': ['WINDOWS']
+        },
         'fields': [
             '*',
             'device_os',
@@ -320,11 +324,12 @@ def analyze_processes():
 
     # Enable debugging
     # * Used for debugging. This will limit the search to only the hash or device_id defined
+    query = None
     if 'debug' in config:
         if 'cb_sample_hash' in config['debug'] and config['debug']['cb_sample_hash'] != '':
             query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
         if 'device_id' in config['debug'] and config['debug']['device_id'] != '':
-            query = '({0}) AND device_id:{1}'.format(query, config['debug']['device_id'])
+            search_body['criteria']['device_id'] = config['debug']['device_id']
     
         search_body['query'] = query
 
@@ -350,6 +355,7 @@ def analyze_processes():
         if process_record is None or process_record[0][4] == 'pending':
             if process_record is None:
                 log.debug('[%s] The process "{0}" has not been inspected before.'.format(process_guid), fn_name)
+                db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
             else:
                 log.debug('[%s] The process "{0}" is pending. Checking this process again.'.format(process_guid), fn_name)
 
@@ -388,7 +394,7 @@ def analyze_processes():
                             action_required = True
                         
                     # * Save PROCESS to the local database as COMPLETE
-                    db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+                    db.update_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
 
                 # If the hash is still pending
                 else:
@@ -401,13 +407,19 @@ def analyze_processes():
     
                         if report is None:
                             continue
+
+                        # Sometimes a score isn't present when the report first finishes. If it doesn't have a score, skip it this iteration
+                        if 'score' not in report:
+                            log.debug('[%s] Task {0} does not have a score yet. Will try again on the next run.'.format(task_uuid))
+                            continue
+
                         # Update report in db
                         if report['score'] >= int(config['Lastline']['action_threashold']):
                             log.warning('[%s] Taking action on process "{0}" with hash "{1}"'.format(process_guid, sha256), fn_name)
                             take_action(report, sha256, process)
 
                         else:
-                            log.info('[%s] Report score for {0} is {1}. Not high enough to take action.'.format(task_uuid, ll_result['score']), fn_name)
+                            log.info('[%s] Report score for {0} is {1}. Not high enough to take action.'.format(task_uuid, report['score']), fn_name)
 
                         db.update_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
                         db.update_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=ll_result)
@@ -431,11 +443,13 @@ def analyze_processes():
                     score = report['score']
                     task_uuid = report['task_uuid']
 
+                    # ! Check for errors
+                    # * if len(report['errors']) > 0
                     if score >= int(config['Lastline']['action_threashold']):
                         take_action(report, sha256, process)
 
                     db.add_record('reports', sha256=sha256, status='complete', task_uuid=task_uuid, reports=report)
-                    db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+                    db.update_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
 
                 # If the file HAS NOT been detonated
                 else:
@@ -452,7 +466,7 @@ def analyze_processes():
                                 ll_submission = ll.submit_url(binary_url)
 
                                 db.add_record('reports', sha256=sha256, status='pending', task_uuid=ll_submission['task_uuid'], reports=ll_submission)
-                                db.add_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
+                                db.update_record('processes', sha256=sha256, process_guid=process_guid, status='pending')
                             else:
                                 log.warning('[%s] Unable to find binary for {0}'.format(sha256), fn_name)
                         else:
@@ -462,7 +476,7 @@ def analyze_processes():
 
                     else:
                         log.warning('[%s] UBS is only available on Windows devices. This device is {0}'.format(process['device_os']), fn_name)
-                        db.add_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
+                        db.update_record('processes', sha256=sha256, process_guid=process_guid, status='complete')
             
             if action_required:
                 log.debug('[%s] Taking action on process "{0}"'.format(process_guid))
