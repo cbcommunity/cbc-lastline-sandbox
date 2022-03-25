@@ -135,8 +135,11 @@ def take_action(report, sha256, process):
         # Build the Report arguments
         timestamp = convert_time(convert_time('now'))
         title = '{0}'.format(sha256)
-        description = '. '.join(report['malicious_activity'])
-        description = '{0} - https://user.lastline.com/portal#/analyst/task/{1}/overview'.format(description, report['task_uuid'])
+
+        description = 'https://user.lastline.com/portal#/analyst/task/{1}/overview'.format(description, report['task_uuid'])
+        if 'malicious_actvity' in report:
+            description = '{0} - {1}'.format('. '.join(report['malicious_activity']), description)
+        
         tags = []
 
         # Lastline's scoring is 0-100, CBC EEDR is 1-10
@@ -298,9 +301,10 @@ def analyze_processes():
     # query = 'process_effective_reputation:{0}'.format(reputations)
 
     # Build the request body
+    # Note that this can use `process_effective_reputation` for greater reliability
     search_body = {
         'criteria': {
-            'process_effective_reputation': reputations,
+            'process_reputation': reputations,
             'device_os': ['WINDOWS']
         },
         'fields': [
@@ -324,15 +328,13 @@ def analyze_processes():
 
     # Enable debugging
     # * Used for debugging. This will limit the search to only the hash or device_id defined
-    query = None
     if 'debug' in config:
         if 'cb_sample_hash' in config['debug'] and config['debug']['cb_sample_hash'] != '':
-            query = 'process_hash:{0}'.format(config['debug']['cb_sample_hash'])
-        if 'device_id' in config['debug'] and config['debug']['device_id'] != '':
-            search_body['criteria']['device_id'] = config['debug']['device_id']
-    
-        search_body['query'] = query
+            search_body['criteria']['process_hash'] = [config['debug']['cb_sample_hash']]
 
+        if 'device_id' in config['debug'] and config['debug']['device_id'] != '':
+            search_body['criteria']['device_id'] = [config['debug']['device_id']]
+    
     log.debug('[%s] Created query to search for processes: {0}'.format(search_body), fn_name)
 
     # Run the search and get results

@@ -63,44 +63,6 @@ class CarbonBlackCloud:
     #
     # CBC Platform
     #
-    def get_alerts(self, start_time=None, end_time=None, limit=None):
-        '''
-            !!! Description here....
-            [] add pagination to get full results
-        '''
-        # Define the request basics
-        url = '/'.join([self.url, 'appservices/v6/orgs', self.org_key, 'alerts/_search'])
-        headers = self.headers
-        headers['X-Auth-Token'] = '{0}/{1}'.format(self.cust_api_key, self.cust_api_id)
-        body = {
-            'criteria': {
-                'category': ['THREAT'],
-                'reputation': ['KNOWN_MALWARE', 'PUP', 'SUSPECT_MALWARE'],
-                'create_time': {
-                    'start': start_time,
-                    'end': end_time
-                },
-                'group_results': False,
-                'minimum_severity': 3
-            },
-            'sort': [{'field': 'create_time', 'order': 'DESC'}],
-            'rows': 100,
-            'start': 0
-        }
-
-        # Request the data from the endpoint
-        r = requests.post(url, headers=headers, data=json.dumps(body))
-
-        # If the request was successful
-        if r.status_code == 200:
-            data = r.json()
-            self.log.info('[%s] Found {0} alerts'.format(len(data['results'])), self.class_name)
-            return data
-
-        else:
-            self.log.error('[%s] Error {0}: {1}'.format(r.status_code, r.text), self.class_name)
-            raise Exception('Error {0}: {1}'.format(r.status_code, r.text))
-
     def get_processes(self, body=None):
         '''
             The Get Processes API is asyncronous. We first make the request for the search,
@@ -162,6 +124,7 @@ class CarbonBlackCloud:
 
     def get_process_results(self, job_id, start, rows):
         '''
+            This will get the results of a process search request
         '''
         self.log.info('[%s] Getting process results for job {0} starting from {1} with {2} rows.'.format(job_id, start, rows), self.class_name)
 
@@ -186,7 +149,7 @@ class CarbonBlackCloud:
 
     def get_device(self, device_id):
         '''
-            !!! comment here
+            Get the details of a device
         '''
         self.log.info('[%s] Getting device information: {0}.'.format(device_id), self.class_name)
 
@@ -245,7 +208,7 @@ class CarbonBlackCloud:
             r = requests.post(url, headers=headers, data=json.dumps(body))
 
             # If the request was successful
-            if r.status_code == 200:
+            if r.status_code == 204:
                 return True
 
             else:
@@ -330,7 +293,7 @@ class CarbonBlackCloud:
 
     def get_process_limits(self):
         '''
-            !!! Description here....
+            CBC only provides a certain window of dates to pull data. This will return that window of dates.
         '''
         # Define the request basics
         url = '/'.join([self.url, 'api/investigate/v1/orgs', self.org_key, 'processes/limits'])
@@ -968,8 +931,7 @@ class Lastline:
 
     def query_hash(self, md5=None, sha256=None):
         '''
-            !!! Coming soon...
-            [] check to see if 
+            Search Lastline to see if a hash has been inspected before.
         '''
 
         if md5 is None and sha256 is None:
@@ -1056,8 +1018,7 @@ class Lastline:
 
     def get_results(self, uuid):
         '''
-            !!! Coming soon...
-            [] check to see if 
+            Get the results of a report
         '''
 
         # !!! check to make sure uuid is a string
@@ -1206,7 +1167,7 @@ class NSX:
 
     def search_devices(self, device_name):
         '''
-            !!! comment here
+            Search for devices by device_name
         '''
         self.log.info('[%s] Searching for device: {0}.'.format(device_name), self.class_name)
 
@@ -1233,7 +1194,7 @@ class NSX:
 
     def add_tag(self, resource_id, tag_name):
         '''
-            !!! comment here
+            Add a tag to a resource_id
         '''
         self.log.info('[%s] Adding tag {0} to device with resource_id {1}.'.format(tag_name, resource_id), self.class_name)
 
@@ -1598,7 +1559,7 @@ class Database:
 
     def update_record(self, table, **data):
         '''
-            !!  Coming soon...
+            Update the SQL record for a given table with the given data.
 
             Inputs
                 md5 (str):      MD5 hash to add to the row
