@@ -1,7 +1,7 @@
 
 # Lastline Sandbox Connector for VMware Carbon Black Cloud
 
-This is an integration between Lastline's TAP product and VMware Carbon Black Cloud (CBC).
+This is an integration between Lastline's product and VMware Carbon Black Cloud (CBC).
 
 **Latest Version:** v0.9.1  
 **Release Date:** March 2021
